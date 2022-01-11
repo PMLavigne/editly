@@ -30,13 +30,15 @@ async function createGlFrameSource({ width, height, channels, params }) {
 
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, 1, 1, -1, 1]), gl.STATIC_DRAW);
 
-  async function readNextFrame(progress) {
+  async function readNextFrame(progress, canvas, totalElapsedTime) {
     shader.bind();
 
     shader.attributes.position.pointer();
 
     shader.uniforms.resolution = [width, height];
     shader.uniforms.time = progress * speed;
+    shader.uniforms.totalElapsedTime = totalElapsedTime;
+    shader.uniforms.speed = speed;
 
     gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
 

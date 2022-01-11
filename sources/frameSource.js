@@ -47,7 +47,7 @@ async function createFrameSource({ clip, clipIndex, width, height, channels, ver
     return { layer, frameSource };
   }, { concurrency: 1 });
 
-  async function readNextFrame({ time }) {
+  async function readNextFrame({ time, totalElapsedTime }) {
     const canvas = createFabricCanvas({ width, height });
 
     // eslint-disable-next-line no-restricted-syntax
@@ -59,7 +59,7 @@ async function createFrameSource({ clip, clipIndex, width, height, channels, ver
 
       if (shouldDrawLayer) {
         if (logTimes) console.time('frameSource.readNextFrame');
-        const rgba = await frameSource.readNextFrame(offsetProgress, canvas);
+        const rgba = await frameSource.readNextFrame(offsetProgress, canvas, totalElapsedTime);
         if (logTimes) console.timeEnd('frameSource.readNextFrame');
 
         // Frame sources can either render to the provided canvas and return nothing

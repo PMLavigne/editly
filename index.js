@@ -270,6 +270,7 @@ const Editly = async (config = {}) => {
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      const totalElapsedTime = totalFramesWritten / fps;
       const transitionToClip = getTransitionToClip();
       const transitionFromClip = getTransitionFromClip();
       const fromClipNumFrames = Math.round(transitionFromClip.duration * fps);
@@ -320,7 +321,7 @@ const Editly = async (config = {}) => {
       }
 
       if (logTimes) console.time('Read frameSource1');
-      const newFrameSource1Data = await frameSource1.readNextFrame({ time: fromClipTime });
+      const newFrameSource1Data = await frameSource1.readNextFrame({ time: fromClipTime, totalElapsedTime });
       if (logTimes) console.timeEnd('Read frameSource1');
       // If we got no data, use the old data
       // TODO maybe abort?
@@ -333,7 +334,7 @@ const Editly = async (config = {}) => {
 
       if (isInTransition) {
         if (logTimes) console.time('Read frameSource2');
-        const frameSource2Data = await frameSource2.readNextFrame({ time: toClipTime });
+        const frameSource2Data = await frameSource2.readNextFrame({ time: toClipTime, totalElapsedTime });
         if (logTimes) console.timeEnd('Read frameSource2');
 
         if (frameSource2Data) {
@@ -425,7 +426,7 @@ async function renderSingleFrame({
   assert(clip, 'No clip found at requested time');
   const clipIndex = clips.indexOf(clip);
   const frameSource = await createFrameSource({ clip, clipIndex, width, height, channels, verbose, logTimes, ffmpegPath, ffprobePath, enableFfmpegLog, framerateStr: '1' });
-  const rgba = await frameSource.readNextFrame({ time: time - clipStartTime });
+  const rgba = await frameSource.readNextFrame({ time: time - clipStartTime, totalElapsedTime: time });
 
   // TODO converting rgba to png can be done more easily?
   const canvas = createFabricCanvas({ width, height });
