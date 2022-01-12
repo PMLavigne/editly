@@ -1,6 +1,32 @@
 const GL = require('gl');
 const createShader = require('gl-shader');
 const fs = require('fs-extra');
+const path = require('path');
+
+/**
+ * Simple one-pass, non-recursive handling of #import statements in fragment files
+ * @param startFilePath File to process for #imports
+ * @returns {Promise<string>} File contents, with import statements replaced by the
+ *                            contents of the imported files
+ */
+async function handleFragmentImports(startFilePath) {
+  const importRegex = /^#include\s+"(.+)"$/gmi;
+  const mainSource = await fs.readFile(startFilePath, { encoding: 'utf-8' });
+  const baseDir = path.dirname(startFilePath);
+  return mainSource.replace(importRegex, (match, fileName) => {
+    if (!fileName) {
+      return '';
+    }
+    fileName = fileName.replace('\\\\', '\\')
+                       .replace('\\"', '"');
+
+    if (!path.isAbsolute(fileName)) {
+      fileName = path.resolve(baseDir, fileName);
+    }
+
+    return fs.readFileSync(fileName, { encoding: 'utf-8' });
+  });
+}
 
 // I have no idea what I'm doing but it works ¯\_(ツ)_/¯
 
@@ -18,8 +44,8 @@ async function createGlFrameSource({ width, height, channels, params }) {
   let fragmentSrc = fragmentSrcIn;
   let vertexSrc = vertexSrcIn;
 
-  if (fragmentPath) fragmentSrc = await fs.readFile(fragmentPath);
-  if (vertexPath) vertexSrc = await fs.readFile(vertexPath);
+  if (fragmentPath) fragmentSrc = await handleFragmentImports(fragmentPath);
+  if (vertexPath) vertexSrc = await handleFragmentImports(vertexPath);
 
   if (!vertexSrc) vertexSrc = defaultVertexSrc;
 
