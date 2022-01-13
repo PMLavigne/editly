@@ -39,7 +39,14 @@ async function createGlFrameSource({ width, height, channels, params }) {
       gl_Position = vec4(position, 0.0, 1.0 );
     }
   `;
-  const { vertexPath, fragmentPath, vertexSrc: vertexSrcIn, fragmentSrc: fragmentSrcIn, speed = 1 } = params;
+  const {
+    vertexPath,
+    fragmentPath,
+    vertexSrc: vertexSrcIn,
+    fragmentSrc: fragmentSrcIn,
+    speed = 1,
+    uniforms = {}
+  } = params;
 
   let fragmentSrc = fragmentSrcIn;
   let vertexSrc = vertexSrcIn;
@@ -56,15 +63,20 @@ async function createGlFrameSource({ width, height, channels, params }) {
 
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, 1, 1, -1, 1]), gl.STATIC_DRAW);
 
-  async function readNextFrame(progress, canvas, totalElapsedTime) {
+  async function readNextFrame(progress, canvas, totalElapsedTime, clipFrame, globalFrame) {
     shader.bind();
 
     shader.attributes.position.pointer();
+
+    // Copy user-specified uniforms if there are any. Do it first, so the program-specified ones take precedence.
+    Object.assign(shader.uniforms, uniforms);
 
     shader.uniforms.resolution = [width, height];
     shader.uniforms.time = progress * speed;
     shader.uniforms.totalElapsedTime = totalElapsedTime;
     shader.uniforms.speed = speed;
+    shader.uniforms.clipFrame = clipFrame;
+    shader.uniforms.globalFrame = globalFrame;
 
     gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
 

@@ -321,7 +321,12 @@ const Editly = async (config = {}) => {
       }
 
       if (logTimes) console.time('Read frameSource1');
-      const newFrameSource1Data = await frameSource1.readNextFrame({ time: fromClipTime, totalElapsedTime });
+      const newFrameSource1Data = await frameSource1.readNextFrame({
+        time: fromClipTime,
+        totalElapsedTime,
+        clipFrame: fromClipFrameAt,
+        globalFrame: totalFramesWritten
+      });
       if (logTimes) console.timeEnd('Read frameSource1');
       // If we got no data, use the old data
       // TODO maybe abort?
@@ -334,7 +339,12 @@ const Editly = async (config = {}) => {
 
       if (isInTransition) {
         if (logTimes) console.time('Read frameSource2');
-        const frameSource2Data = await frameSource2.readNextFrame({ time: toClipTime, totalElapsedTime });
+        const frameSource2Data = await frameSource2.readNextFrame({
+          time: toClipTime,
+          totalElapsedTime,
+          clipFrame: toClipFrameAt,
+          globalFrame: totalFramesWritten
+        });
         if (logTimes) console.timeEnd('Read frameSource2');
 
         if (frameSource2Data) {
@@ -418,6 +428,7 @@ async function renderSingleFrame({
 }) {
   const clips = await parseConfig({ defaults, clips: clipsIn, arbitraryAudio: [], allowRemoteRequests, ffprobePath });
   let clipStartTime = 0;
+  const fps = defaults && defaults.fps ? defaults.fps : 1;
   const clip = clips.find((c) => {
     if (clipStartTime <= time && clipStartTime + c.duration > time) return true;
     clipStartTime += c.duration;
@@ -426,7 +437,12 @@ async function renderSingleFrame({
   assert(clip, 'No clip found at requested time');
   const clipIndex = clips.indexOf(clip);
   const frameSource = await createFrameSource({ clip, clipIndex, width, height, channels, verbose, logTimes, ffmpegPath, ffprobePath, enableFfmpegLog, framerateStr: '1' });
-  const rgba = await frameSource.readNextFrame({ time: time - clipStartTime, totalElapsedTime: time });
+  const rgba = await frameSource.readNextFrame({
+    time: time - clipStartTime,
+    totalElapsedTime: time,
+    clipFrame: Math.floor(fps * (time - clipStartTime)),
+    globalFrame: Math.floor(fps * time)
+  });
 
   // TODO converting rgba to png can be done more easily?
   const canvas = createFabricCanvas({ width, height });
