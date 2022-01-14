@@ -1,6 +1,6 @@
 const execa = require('execa');
 const assert = require('assert');
-const { join, dirname } = require('path');
+const { join, dirname, basename } = require('path');
 const JSON5 = require('json5');
 const fs = require('fs-extra');
 const { nanoid } = require('nanoid');
@@ -17,7 +17,7 @@ const { assertFileValid, checkTransition } = require('./util');
 const channels = 4;
 
 
-const Editly = async (config = {}) => {
+const Editly = async (config = {}, chunkNum, totalChunks) => {
   const {
     // Testing options:
     enableFfmpegLog = false,
@@ -46,6 +46,14 @@ const Editly = async (config = {}) => {
     ffprobePath = 'ffprobe',
   } = config;
 
+  let chunkMode = false;
+  if (typeof chunkNum === 'number' && typeof totalChunks === 'number') {
+    assert(chunkNum >= 0, "chunkNum cannot be negative");
+    assert(totalChunks >= 1, "totalChunks cannot be less than 1");
+    assert(chunkNum < totalChunks, "chunkNum cannot be greater than or equal to totalChunks");
+    chunkMode = true;
+  }
+
   await testFf(ffmpegPath, 'ffmpeg');
   await testFf(ffprobePath, 'ffprobe');
 
@@ -55,18 +63,24 @@ const Editly = async (config = {}) => {
 
   checkTransition(defaults.transition);
 
-  if (verbose) console.log(JSON5.stringify(config, null, 2));
+  // if (verbose) console.log(JSON5.stringify(config, null, 2));
 
   assert(outPath, 'Please provide an output path');
   assert(clipsIn.length > 0, 'Please provide at least 1 clip');
 
   const { clips, arbitraryAudio } = await parseConfig({ defaults, clips: clipsIn, arbitraryAudio: arbitraryAudioIn, backgroundAudioPath, loopAudio, allowRemoteRequests, ffprobePath });
-  if (verbose) console.log('Calculated', JSON5.stringify({ clips, arbitraryAudio }, null, 2));
+  // if (verbose) console.log('Calculated', JSON5.stringify({ clips, arbitraryAudio }, null, 2));
 
   const outDir = dirname(outPath);
+  const outFileName = basename(outPath);
   const tmpDir = join(outDir, `editly-tmp-${nanoid()}`);
   if (verbose) console.log({ tmpDir });
   await fs.mkdirp(tmpDir);
+
+  let computedOutPath = outPath;
+  if (chunkMode) {
+    computedOutPath = join(outDir, `chunk-${chunkNum}-${outFileName}`);
+  }
 
   const { editAudio } = Audio({ ffmpegPath, ffprobePath, enableFfmpegLog, verbose, tmpDir });
 
@@ -163,11 +177,18 @@ const Editly = async (config = {}) => {
 
   console.log(`${width}x${height} ${fps}fps`);
 
-  const estimatedTotalFrames = fps * clips.reduce((acc, c, i) => {
+  clips.forEach((curClip) => {
+    const clipFrames = Math.round(curClip.duration * fps);
+    curClip.duration = clipFrames / fps;
+    const transitionFrames = Math.round(curClip.transition.duration * fps);
+    curClip.transition.duration = transitionFrames / fps;
+  });
+
+  const estimatedTotalFrames = Math.ceil(fps * clips.reduce((acc, c, i) => {
     let newAcc = acc + c.duration;
     if (i !== clips.length - 1) newAcc -= c.transition.duration;
     return newAcc;
-  }, 0);
+  }, 0));
 
   const { runTransitionOnFrame: runGlTransitionOnFrame } = GlTransitions({ width, height, channels });
 
@@ -193,12 +214,13 @@ const Editly = async (config = {}) => {
       '-vcodec', 'libx264',
       '-profile:v', 'high',
       ...(fast ? ['-preset:v', 'ultrafast'] : ['-preset:v', 'medium']),
-      '-crf', '18',
+      '-crf', '22',
+      '-shortest',
 
       '-movflags', 'faststart',
     ];
 
-    const audioOutputArgs = audioFilePath ? ['-acodec', 'aac', '-b:a', '128k'] : [];
+    const audioOutputArgs = audioFilePath ? ['-acodec', 'aac', '-b:a', '256k'] : [];
 
     return [...audioOutputArgs, ...videoOutputArgs];
   }
@@ -220,8 +242,7 @@ const Editly = async (config = {}) => {
       ...(audioFilePath ? ['-map', '1:a:0'] : []),
 
       ...getOutputArgs(),
-
-      '-y', outPath,
+      '-y', computedOutPath,
     ];
     if (verbose) console.log('ffmpeg', args.join(' '));
     return execa(ffmpegPath, args, { encoding: null, buffer: false, stdin: 'pipe', stdout: process.stdout, stderr: process.stderr });
@@ -249,6 +270,52 @@ const Editly = async (config = {}) => {
   const getTransitionFromSource = async () => getSource(getTransitionFromClip(), transitionFromClipId);
   const getTransitionToSource = async () => (getTransitionToClip() && getSource(getTransitionToClip(), getTransitionToClipId()));
 
+  let startAtFrame = 0;
+  let startAtTime = 0;
+  let endAtFrame = Number.MAX_SAFE_INTEGER;
+  let endAtTime = Number.MAX_SAFE_INTEGER;
+
+  if (chunkMode) {
+    const chunkStartProgress = chunkNum / totalChunks;
+    startAtFrame = Math.floor(estimatedTotalFrames * chunkStartProgress);
+    startAtTime = startAtFrame / fps;
+    // If this is the last chunk, run to the end
+    if (chunkNum + 1 < totalChunks) {
+      const chunkEndProgress = (chunkNum + 1) / totalChunks;
+      endAtFrame = Math.floor(estimatedTotalFrames * chunkEndProgress) - 1;
+      if (endAtFrame < startAtFrame) {
+        endAtFrame = startAtFrame;
+      }
+      endAtTime = endAtFrame / fps;
+    } else {
+      endAtTime = estimatedTotalFrames / fps;
+    }
+
+    let timeSum = 0;
+    for (const curClip of clips) {
+      let curClipEndTime = timeSum + curClip.duration;
+      if (transitionFromClipId !== clips.length - 1) {
+        curClipEndTime -= curClip.transition.duration;
+      }
+      if (curClipEndTime > startAtTime) {
+        break;
+      }
+      timeSum = curClipEndTime;
+      ++transitionFromClipId;
+    }
+
+    const clipStartTime = startAtTime - timeSum;
+    const clipStartFrame = Math.floor(clipStartTime * fps);
+
+    console.log(`Processing chunk ${chunkNum + 1} of ${totalChunks} ` +
+      `(frames ${startAtFrame} to ${endAtFrame === Number.MAX_SAFE_INTEGER ? estimatedTotalFrames : endAtFrame}, ` +
+      `time ${startAtTime.toFixed(3)}s to ${endAtTime.toFixed(3)}s, ` +
+      `starting with clip ${transitionFromClipId} at time ${clipStartTime.toFixed(3)}s)`);
+
+    totalFramesWritten = startAtFrame;
+    fromClipFrameAt = clipStartFrame;
+  }
+
   try {
     outProcess = startFfmpegWriterProcess();
 
@@ -267,6 +334,8 @@ const Editly = async (config = {}) => {
 
     frameSource1 = await getTransitionFromSource();
     frameSource2 = await getTransitionToSource();
+
+    console.log(`Starting chunk on clip ${transitionFromClipId}, frame ${fromClipFrameAt}.`);
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -381,6 +450,12 @@ const Editly = async (config = {}) => {
 
       if (outProcessError) break;
 
+      if (totalFramesWritten >= endAtFrame) {
+        console.log(`Reached chunk end frame on clip ${transitionFromClipId}, frame ${fromClipFrameAt}.`);
+        console.log(`Next chunk should start at ${((totalFramesWritten + 1) / fps).toFixed(3)}s`);
+        break;
+      }
+
       totalFramesWritten += 1;
       fromClipFrameAt += 1;
       if (isInTransition) toClipFrameAt += 1;
@@ -406,7 +481,8 @@ const Editly = async (config = {}) => {
 
   console.log();
   console.log('Done. Output file can be found at:');
-  console.log(outPath);
+  console.log(computedOutPath);
+  return computedOutPath;
 };
 
 // Pure function to get a frame at a certain time
